@@ -122,7 +122,10 @@ class SingleConnection(object):
         self._client = None
         self._framed_transport = framed_transport
         self._timeout = timeout
-        self._logins = logins if logins is not None else {}
+        if logins is None:
+            self._logins = {}
+        else:
+            self._logins = logins
 
     def login(self, keyspace, credentials):
         self._logins[keyspace] = credentials
@@ -170,7 +173,10 @@ class ThreadLocalConnection(object):
         self._round_robin = round_robin
         self._framed_transport = framed_transport
         self._timeout = timeout
-        self._logins = logins if logins is not None else {}
+        if logins is None:
+            self._logins = {}
+        else:
+            self._logins = logins
 
     def login(self, keyspace, credentials):
         self._logins[keyspace] = credentials
