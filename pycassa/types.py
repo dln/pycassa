@@ -2,8 +2,23 @@ from datetime import datetime
 import struct
 import time
 
+try:
+    from struct import Struct as _Struct
+except ImportError:
+    class _Struct(object):
+        def __init__(self, fmt):
+            self.fmt = fmt
+            self.size = struct.calcsize(fmt)
+
+        def pack(self, *vs):
+            return struct.pack(self.fmt, *vs)
+
+        def unpack(self, string):
+            return struct.unpack(self.fmt, string)
+
 __all__ = ['Column', 'DateTime', 'DateTimeString', 'Float64', 'FloatString',
            'Int64', 'IntString', 'String']
+
 
 class Column(object):
     def __init__(self, default=None):
@@ -12,7 +27,7 @@ class Column(object):
 class DateTime(Column):
     def __init__(self, *args, **kwargs):
         Column.__init__(self, *args, **kwargs)
-        self.struct = struct.Struct('q')
+        self.struct = _Struct('q')
 
     def pack(self, val):
         if not isinstance(val, datetime):
@@ -35,7 +50,7 @@ class DateTimeString(Column):
 class Float64(Column):
     def __init__(self, *args, **kwargs):
         Column.__init__(self, *args, **kwargs)
-        self.struct = struct.Struct('d')
+        self.struct = _Struct('d')
 
     def pack(self, val):
         if not isinstance(val, float):
@@ -57,7 +72,7 @@ class FloatString(Column):
 class Int64(Column):
     def __init__(self, *args, **kwargs):
         Column.__init__(self, *args, **kwargs)
-        self.struct = struct.Struct('q')
+        self.struct = _Struct('q')
 
     def pack(self, val):
         if not isinstance(val, (int, long)):
