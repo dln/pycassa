@@ -3,6 +3,11 @@ import struct
 import time
 
 try:
+    from pymongo import bson
+except ImportError:
+    bson = None
+
+try:
     from struct import Struct as _Struct
 except ImportError:
     class _Struct(object):
@@ -16,7 +21,7 @@ except ImportError:
         def unpack(self, string):
             return struct.unpack(self.fmt, string)
 
-__all__ = ['Column', 'DateTime', 'DateTimeString', 'Float64', 'FloatString',
+__all__ = ['BSON', 'Column', 'DateTime', 'DateTimeString', 'Float64', 'FloatString',
            'Int64', 'IntString', 'String']
 
 
@@ -99,3 +104,19 @@ class String(Column):
 
     def unpack(self, val):
         return val
+
+
+if not bson:
+    class BSON(Column):
+        def __getattr__(self): raise ImportError('BSON column type requires `pymongo`.')
+
+else:
+    class BSON(Column):
+        def pack(self, val):
+            if not isinstance(val, dict):
+                raise TypeError('expected dict, %s found' % type(val).__name__)
+            return str(bson.BSON.from_dict(val))
+
+        def unpack(self, val):
+            return bson.BSON(val).to_dict()
+

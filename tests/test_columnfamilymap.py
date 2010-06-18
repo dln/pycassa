@@ -2,8 +2,15 @@ from datetime import datetime
 
 from pycassa import connect, connect_thread_local, gm_timestamp, ColumnFamily, \
     ColumnFamilyMap, ConsistencyLevel, NotFoundException, String, Int64, \
-    Float64, DateTime, IntString, FloatString, DateTimeString
+    Float64, DateTime, IntString, FloatString, DateTimeString, BSON
+
 from nose.tools import assert_raises
+
+try:
+    import pymongo
+except ImportError:
+    pymongo = None
+
 
 class TestUTF8(object):
     strcol = String(default='default')
@@ -19,6 +26,16 @@ class TestUTF8(object):
 
     def __ne__(self, other):
         return self.__dict__ != other.__dict__
+
+if not pymongo:
+    sys.stderr.write("pymongo not found. Skipping BSON tests.\n")
+else:
+    class TestBSON(object):
+        def test_bson(self):
+            f=BSON()
+            data = {'foo':[1,2,3], 'bar':42, 'baz':'quux'}
+            assert f.unpack(f.pack(data)) == data
+
 
 class TestEmpty(object):
     pass
