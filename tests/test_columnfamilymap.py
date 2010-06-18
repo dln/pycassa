@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pycassa import connect, connect_thread_local, gm_timestamp, ColumnFamily, \
     ColumnFamilyMap, ConsistencyLevel, NotFoundException, String, Int64, \
-    Float64, DateTime, IntString, FloatString, DateTimeString, BSON
+    Float64, DateTime, IntString, FloatString, DateTimeString, BSON, Wirebin
 
 from nose.tools import assert_raises
 
@@ -10,6 +10,11 @@ try:
     import pymongo
 except ImportError:
     pymongo = None
+
+try:
+    import wbin
+except ImportError:
+    wbin = None
 
 
 class TestUTF8(object):
@@ -33,6 +38,16 @@ else:
     class TestBSON(object):
         def test_bson(self):
             f=BSON()
+            data = {'foo':[1,2,3], 'bar':42, 'baz':'quux'}
+            assert f.unpack(f.pack(data)) == data
+
+
+if not wbin:
+    sys.stderr.write("wbin not found. Skipping Wirebin tests.\n")
+else:
+    class TestWirebin(object):
+        def test_wirebin(self):
+            f=Wirebin()
             data = {'foo':[1,2,3], 'bar':42, 'baz':'quux'}
             assert f.unpack(f.pack(data)) == data
 

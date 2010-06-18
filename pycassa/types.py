@@ -8,6 +8,11 @@ except ImportError:
     bson = None
 
 try:
+    import wbin
+except ImportError:
+    wbin = None
+
+try:
     from struct import Struct as _Struct
 except ImportError:
     class _Struct(object):
@@ -22,7 +27,7 @@ except ImportError:
             return struct.unpack(self.fmt, string)
 
 __all__ = ['BSON', 'Column', 'DateTime', 'DateTimeString', 'Float64', 'FloatString',
-           'Int64', 'IntString', 'String']
+           'Int64', 'IntString', 'String', 'Wirebin']
 
 
 class Column(object):
@@ -108,10 +113,11 @@ class String(Column):
 
 if not bson:
     class BSON(Column):
-        def __getattr__(self): raise ImportError('BSON column type requires `pymongo`.')
+        def __getattr__(self): raise ImportError('BSON column type requires `pymongo`. See http://bsonspec.org/')
 
 else:
     class BSON(Column):
+        """Binary-encoded serialization of JSON-like documents."""
         def pack(self, val):
             if not isinstance(val, dict):
                 raise TypeError('expected dict, %s found' % type(val).__name__)
@@ -119,4 +125,17 @@ else:
 
         def unpack(self, val):
             return bson.BSON(val).to_dict()
+
+if not wbin:
+    class Wirebin(Column):
+        def __getattr__(self): raise ImportError('BSON column type requires `wbin`. See http://github.com/slideinc/wirebin/.')
+
+else:
+    class Wirebin(Column):
+        """Fast binary [de]serialization of native Python types."""
+        def pack(self, val):
+            return wbin.serialize(val)
+
+        def unpack(self, val):
+            return wbin.deserialize(val)
 
