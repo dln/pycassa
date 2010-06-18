@@ -1,7 +1,8 @@
 from exceptions import Exception
+import random
 import socket
 import threading
-from Queue import Queue
+import time
 
 from thrift import Thrift
 from thrift.transport import TTransport
@@ -37,14 +38,19 @@ def create_client_transport(server, framed_transport, timeout, logins):
 
     return client, transport
 
-def connect(servers=None, framed_transport=False, timeout=None, logins=None):
+
+
+def connect(servers=None, framed_transport=False, timeout=None, retry_time=60, logins=None):
     """
-    Constructs a single Cassandra connection. Initially connects to the first
+    Constructs a single Cassandra connection. Connects to a randomly chosen
     server on the list.
-    
+
     If the connection fails, it will attempt to connect to each server on the
     list in turn until one succeeds. If it is unable to find an active server,
     it will throw a NoServerAvailable exception.
+
+    Failing servers are kept on a separate list and eventually retried, no
+    sooner than `retry_time` seconds after failure.
 
     Parameters
     ----------
@@ -58,6 +64,10 @@ def connect(servers=None, framed_transport=False, timeout=None, logins=None):
               Timeout in seconds (e.g. 0.5)
 
               Default: None (it will stall forever)
+    retry_time: float
+              Minimum time in seconds until a failed server is , retry_time=60reinstated. (e.g. 0.5)
+
+              Default: 60
     logins : dict
               Dictionary of Keyspaces and Credentials
 
@@ -70,17 +80,20 @@ def connect(servers=None, framed_transport=False, timeout=None, logins=None):
 
     if servers is None:
         servers = [DEFAULT_SERVER]
-    return SingleConnection(servers, framed_transport, timeout, logins)
+    return SingleConnection(servers, framed_transport, timeout, retry_time, logins)
 
-def connect_thread_local(servers=None, round_robin=True, framed_transport=False, timeout=None, logins=None):
+def connect_thread_local(servers=None, framed_transport=False, timeout=None, retry_time=60, logins=None):
     """
-    Constructs a Cassandra connection for each thread. By default, it attempts
-    to connect in a round_robin (load-balancing) fashion. Turn it off by
-    setting round_robin=False
+    Constructs a Cassandra connection for each thread.
 
     If the connection fails, it will attempt to connect to each server on the
     list in turn until one succeeds. If it is unable to find an active server,
     it will throw a NoServerAvailable exception.
+
+    Failing servers are kept on a separate list and eventually retried, no
+    sooner than `retry_time` seconds after failure.
+
+    Parameters
 
     Parameters
     ----------
@@ -88,15 +101,16 @@ def connect_thread_local(servers=None, round_robin=True, framed_transport=False,
               List of Cassandra servers with format: "hostname:port"
 
               Default: ['localhost:9160']
-    round_robin : bool
-              Balance the connections. Set to False to connect to each server
-              in turn.
     framed_transport: bool
               If True, use a TFramedTransport instead of a TBufferedTransport
     timeout: float
               Timeout in seconds (e.g. 0.5 for half a second)
 
               Default: None (it will stall forever)
+    retry_time: float
+              Minimum time in seconds until a failed server is reinstated. (e.g. 0.5)
+
+              Default: 60
     logins : dict
               Dictionary of Keyspaces and Credentials
 
@@ -109,116 +123,78 @@ def connect_thread_local(servers=None, round_robin=True, framed_transport=False,
 
     if servers is None:
         servers = [DEFAULT_SERVER]
-    return ThreadLocalConnection(servers, round_robin, framed_transport, timeout, logins)
+    return ThreadLocalConnection(servers, framed_transport, timeout, retry_time, logins)
+
 
 class SingleConnection(object):
-    def __init__(self, servers, framed_transport, timeout, logins):
-        self._servers = servers
-        self._client = None
+    def __init__(self, servers, framed_transport, timeout, retry_time, logins):
+        self._servers = list(servers)
+        self._dead = []
         self._framed_transport = framed_transport
         self._timeout = timeout
+        self._retry_time = retry_time
         if logins is None:
             self._logins = {}
         else:
             self._logins = logins
+        self._client = None
+        self._lock = threading.RLock()
+
 
     def login(self, keyspace, credentials):
         self._logins[keyspace] = credentials
 
     def __getattr__(self, attr):
-        def client_call(*args, **kwargs):
-            if self._client is None:
-                self._find_server()
-            try:
-                return getattr(self._client, attr)(*args, **kwargs)
-            except (Thrift.TException, socket.timeout, socket.error), exc:
-                # Connection error, try to connect to all the servers
-                self._transport.close()
-                self._client = None
+        def _client_call(*args, **kwargs):
+            while True:
+                self.connect()
+                try:
+                    return getattr(self._client, attr)(*args, **kwargs)
+                except (Thrift.TException, socket.timeout, socket.error):
+                    self.close()
 
-                for server in self._servers:
-                    try:
-                        self._client, self._transport = create_client_transport(server, self._framed_transport, self._timeout, self._logins)
-                        return getattr(self._client, attr)(*args, **kwargs)
-                    except (Thrift.TException, socket.timeout, socket.error), exc:
-                        continue
-                self._client = None
-                raise NoServerAvailable()
-
-        setattr(self, attr, client_call)
+        setattr(self, attr, _client_call)
         return getattr(self, attr)
 
-    def _find_server(self):
-        for server in self._servers:
-            try:
-                self._client, self._transport = create_client_transport(server, self._framed_transport, self._timeout, self._logins)
-                return
-            except (Thrift.TException, socket.timeout, socket.error), exc:
-                continue
-        self._client = None
-        raise NoServerAvailable()
+    def connect(self):
+        if self._client is None:
+            self._client, self._transport = self._connect()
 
-class ThreadLocalConnection(object):
-    def __init__(self, servers, round_robin, framed_transport, timeout, logins):
-        self._servers = servers
-        self._queue = Queue()
-        for i in xrange(len(servers)):
-            self._queue.put(i)
+    def close(self):
+        self._transport.close()
+        self._client = None
+
+    def _get_server(self):
+        if self._dead:
+            ts, revived = self._dead.pop()
+            if ts > time.time():  # Not yet, put it back
+                self._dead.append((ts, revived))
+            else:
+                self._servers.append(revived)
+        if not self._servers:
+            raise NoServerAvailable()
+        return random.choice(self._servers)
+
+    def _connect(self):
+        try:
+            server = self._get_server()
+            return create_client_transport(server, self._framed_transport, self._timeout, self._logins)
+        except (Thrift.TException, socket.timeout, socket.error):
+            self._servers.remove(server)
+            self._dead.insert(0, (time.time() + self._retry_time, server))
+            return self._connect()
+
+
+class ThreadLocalConnection(SingleConnection):
+    def __init__(self, servers, framed_transport, timeout, retry_time, logins):
+        super(ThreadLocalConnection, self).__init__(servers, framed_transport, timeout, retry_time, logins)
         self._local = threading.local()
-        self._round_robin = round_robin
-        self._framed_transport = framed_transport
-        self._timeout = timeout
-        if logins is None:
-            self._logins = {}
-        else:
-            self._logins = logins
 
-    def login(self, keyspace, credentials):
-        self._logins[keyspace] = credentials
-
-    def __getattr__(self, attr):
-        def client_call(*args, **kwargs):
+        def connect(self):
             if getattr(self._local, 'client', None) is None:
-                self._find_server()
+                self._local.client, self._local.transport = self._servers.connect()
 
-            try:
-                return getattr(self._local.client, attr)(*args, **kwargs)
-            except (Thrift.TException, socket.timeout, socket.error), exc:
-                # Connection error, try to connect to all the servers
-                self._local.transport.close()
-                self._local.client = None
+        def close(self):
+            self._local.transport.close()
+            self._local.client = None
 
-                servers = self._round_robin_servers()
-
-                for server in servers:
-                    try:
-                        self._local.client, self._local.transport = create_client_transport(server, self._framed_transport, self._timeout, self._logins)
-                        return getattr(self._local.client, attr)(*args, **kwargs)
-                    except (Thrift.TException, socket.timeout, socket.error), exc:
-                        continue
-                self._local.client = None
-                raise NoServerAvailable()
-
-        setattr(self, attr, client_call)
-        return getattr(self, attr)
-
-    def _round_robin_servers(self):
-        servers = self._servers
-        if self._round_robin:
-            i = self._queue.get()
-            self._queue.put(i)
-            servers = servers[i:]+servers[:i]
-
-        return servers
-
-    def _find_server(self):
-        servers = self._round_robin_servers()
-
-        for server in servers:
-            try:
-                self._local.client, self._local.transport = create_client_transport(server, self._framed_transport, self._timeout, self._logins)
-                return
-            except (Thrift.TException, socket.timeout, socket.error), exc:
-                continue
-        self._local.client = None
-        raise NoServerAvailable()
