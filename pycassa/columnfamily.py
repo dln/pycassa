@@ -27,7 +27,7 @@ class ColumnFamily(object):
                  read_consistency_level=ConsistencyLevel.ONE,
                  write_consistency_level=ConsistencyLevel.ONE,
                  timestamp=gm_timestamp, super=False,
-                 dict_class=dict):
+                 dict_class=dict, type=None):
         """
         Construct a ColumnFamily
 
@@ -63,6 +63,9 @@ class ColumnFamily(object):
             If the order of columns matter to you, pass your own dictionary
             class, or python 2.7's new collections.OrderedDict. All returned
             rows and subcolumns are instances of this.
+        type : class
+            Column value type. Used for automatic [de]serialization of
+            values, like ColumnFamilyMap. Default (None) means no serialization.
         """
         self.client = client
         self.keyspace = keyspace
@@ -73,11 +76,19 @@ class ColumnFamily(object):
         self.timestamp = timestamp
         self.super = super
         self.dict_class = dict_class
+        if type:
+            self.column_serializer = type()
+        else:
+            self.column_serializer = None
 
     def _convert_Column_to_base(self, column, include_timestamp):
+        if self.column_serializer:
+            column_value = self.column_serializer.unpack(column.value)
+        else:
+            column_value = column.value
         if include_timestamp:
-            return (column.value, column.timestamp)
-        return column.value
+            return (column_value, column.timestamp)
+        return column_value
 
     def _convert_SuperColumn_to_base(self, super_column, include_timestamp):
         ret = self.dict_class()
@@ -317,16 +328,20 @@ class ColumnFamily(object):
         int timestamp
         """
         timestamp = self.timestamp()
+        if self.column_serializer:
+            serialize = self.column_serializer.pack
+        else:
+            serialize = lambda v: v
 
         cols = []
         for c, v in columns.iteritems():
             if self.super:
-                subc = [Column(name=subname, value=subvalue, timestamp=timestamp) \
+                subc = [Column(name=subname, value=serialize(subvalue), timestamp=timestamp) \
                         for subname, subvalue in v.iteritems()]
                 column = SuperColumn(name=c, columns=subc)
                 cols.append(Mutation(column_or_supercolumn=ColumnOrSuperColumn(super_column=column)))
             else:
-                column = Column(name=c, value=v, timestamp=timestamp)
+                column = Column(name=c, value=serialize(v), timestamp=timestamp)
                 cols.append(Mutation(column_or_supercolumn=ColumnOrSuperColumn(column=column)))
         self.client.batch_mutate(self.keyspace,
                                  {key: {self.column_family: cols}},

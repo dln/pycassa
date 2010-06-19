@@ -140,6 +140,19 @@ pycassa retains the behavior of Cassandra in that get_range() may return removed
     >>> list(cf.get_range())
     []
 
+Automatic [de]serialization of Column Values
+--------------------------------------------
+
+A column family can be initialized with a column type to allow automatic [de]seralization of (sub)column values.
+This is particularly useful with generic column type serializers like Wirebin or BSON, effectively allowing
+a column family to be used as a low-ceremony object store.
+
+    >>> cf = pycassa.ColumnFamily(client, 'Test Keyspace', 'TestColumnFamily', type=pycassa.Wirebin)
+    >>> cf.insert('foo', {'bar':42, 'baz':3.14159265, 'quux':[1,2,3,4], 'muux':{'a':1, 'b':[11,22,33]}})
+    >>> cf.get('foo')
+    {'bar':42, 'baz':3.14159265, 'quux':[1,2,3,4], 'muux':{'a':1, 'b':[11,22,33]}}
+
+
 Class Mapping
 -------------
 
