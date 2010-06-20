@@ -205,7 +205,7 @@ class SingleConnection(object):
             server = self._get_server()
             log.info('Connecting to %s', server)
             if self._recycle:
-                self._recycle_time = time.time() + self._recycle
+                self._recycle_time = time.time() + self._recycle + random.uniform(0, self._recycle * 0.1)
                 log.debug('Connection will be forcefully recycled in %.2fs', self._recycle)
             return create_client_transport(server, self._framed_transport, self._timeout, self._logins)
         except (Thrift.TException, socket.timeout, socket.error):
