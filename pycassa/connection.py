@@ -43,7 +43,7 @@ def create_client_transport(server, framed_transport, timeout, logins):
 
 
 
-def connect(servers=None, framed_transport=False, timeout=None, retry_time=60, recycle=None, logins=None):
+def connect(servers=None, framed_transport=False, timeout=None, logins=None, retry_time=60, recycle=None):
     """
     Constructs a single Cassandra connection. Connects to a randomly chosen
     server on the list.
@@ -71,14 +71,14 @@ def connect(servers=None, framed_transport=False, timeout=None, retry_time=60, r
               Minimum time in seconds until a failed server is , retry_time=60reinstated. (e.g. 0.5)
 
               Default: 60
-    recycle: float
-              Max time in seconds before an open connection is closed and returned to the pool.
-
-              Default: None (Never recycle)
     logins : dict
               Dictionary of Keyspaces and Credentials
 
               Example: {'Keyspace1' : {'username':'jsmith', 'password':'havebadpass'}}
+    recycle: float
+              Max time in seconds before an open connection is closed and returned to the pool.
+
+              Default: None (Never recycle)
 
     Returns
     -------
@@ -89,7 +89,7 @@ def connect(servers=None, framed_transport=False, timeout=None, retry_time=60, r
         servers = [DEFAULT_SERVER]
     return SingleConnection(servers, framed_transport, timeout, retry_time, recycle, logins)
 
-def connect_thread_local(servers=None, framed_transport=False, timeout=None, retry_time=60, recycle=None, logins=None):
+def connect_thread_local(servers=None, round_robin=None, framed_transport=False, timeout=None, logins=None, retry_time=60, recycle=None):
     """
     Constructs a Cassandra connection for each thread.
 
@@ -108,12 +108,18 @@ def connect_thread_local(servers=None, framed_transport=False, timeout=None, ret
               List of Cassandra servers with format: "hostname:port"
 
               Default: ['localhost:9160']
+    round_robin: bool
+              *DEPRECATED*
     framed_transport: bool
               If True, use a TFramedTransport instead of a TBufferedTransport
     timeout: float
               Timeout in seconds (e.g. 0.5 for half a second)
 
               Default: None (it will stall forever)
+    logins : dict
+              Dictionary of Keyspaces and Credentials
+
+              Example: {'Keyspace1' : {'username':'jsmith', 'password':'havebadpass'}}
     retry_time: float
               Minimum time in seconds until a failed server is reinstated. (e.g. 0.5)
 
@@ -122,11 +128,6 @@ def connect_thread_local(servers=None, framed_transport=False, timeout=None, ret
               Max time in seconds before an open connection is closed and returned to the pool.
 
               Default: None (Never recycle)
-    logins : dict
-              Dictionary of Keyspaces and Credentials
-
-              Example: {'Keyspace1' : {'username':'jsmith', 'password':'havebadpass'}}
-
     Returns
     -------
     Cassandra client
@@ -134,6 +135,8 @@ def connect_thread_local(servers=None, framed_transport=False, timeout=None, ret
 
     if servers is None:
         servers = [DEFAULT_SERVER]
+    if round_robin is not None:
+        log.warning('connect_thread_local: `round_robin` parameter is deprecated.')
     return ThreadLocalConnection(servers, framed_transport, timeout, retry_time, recycle, logins)
 
 
