@@ -158,7 +158,6 @@ class SingleConnection(object):
         self._client = None
         self._lock = threading.RLock()
 
-
     def login(self, keyspace, credentials):
         self._logins[keyspace] = credentials
 
@@ -179,12 +178,19 @@ class SingleConnection(object):
         return getattr(self, attr)
 
     def connect(self):
-        if self._client is None:
-            self._client, self._transport = self._connect()
+        try:
+            self._lock.acquire()
+            if self._client is None:
+                self._client, self._transport = self._connect()
+        finally:
+            self._lock.release()
 
     def close(self):
-        self._transport.close()
-        self._client = None
+        try:
+            self._transport.close()
+        except:
+            pass
+        self._client = self._transport = None
         log.debug('Connection closed')
 
     def _get_server(self):
