@@ -21,29 +21,38 @@ log = logging.getLogger('pycassa')
 class NoServerAvailable(Exception):
     pass
 
-def create_client_transport(server, framed_transport, timeout, logins):
-    host, port = server.split(":")
-    socket = TSocket.TSocket(host, int(port))
-    if timeout is not None:
-        socket.setTimeout(timeout*1000.0)
-    if framed_transport:
-        transport = TTransport.TFramedTransport(socket)
-    else:
-        transport = TTransport.TBufferedTransport(socket)
-    protocol = TBinaryProtocol.TBinaryProtocolAccelerated(transport)
-    client = Cassandra.Client(protocol)
-    transport.open()
 
-    if logins is not None:
-        for keyspace, credentials in logins.iteritems():
-            request = AuthenticationRequest(credentials=credentials)
-            client.login(keyspace, request)
+class ClientTransport(object):
+    """Encapsulation of a client session."""
 
-    return client, transport
+    def __init__(self, server, framed_transport, timeout, logins, recycle):
+        host, port = server.split(":")
+        socket = TSocket.TSocket(host, int(port))
+        if timeout is not None:
+            socket.setTimeout(timeout*1000.0)
+        if framed_transport:
+            transport = TTransport.TFramedTransport(socket)
+        else:
+            transport = TTransport.TBufferedTransport(socket)
+        protocol = TBinaryProtocol.TBinaryProtocolAccelerated(transport)
+        client = Cassandra.Client(protocol)
+        transport.open()
+
+        if logins is not None:
+            for keyspace, credentials in logins.iteritems():
+                request = AuthenticationRequest(credentials=credentials)
+                client.login(keyspace, request)
+        self.client = client
+        self.transport = transport
+
+        if recycle:
+            self.recycle = time.time() + recycle + random.uniform(0, recycle * 0.1)
+        else:
+            self.recycle = None
 
 
-
-def connect(servers=None, framed_transport=False, timeout=None, logins=None, retry_time=60, recycle=None):
+def connect(servers=None, framed_transport=False, timeout=None, logins=None,
+            retry_time=60, recycle=None):
     """
     Constructs a single Cassandra connection. Connects to a randomly chosen
     server on the list.
@@ -68,7 +77,7 @@ def connect(servers=None, framed_transport=False, timeout=None, logins=None, ret
 
               Default: None (it will stall forever)
     retry_time: float
-              Minimum time in seconds until a failed server is , retry_time=60reinstated. (e.g. 0.5)
+              Minimum time in seconds until a failed server is reinstated. (e.g. 0.5)
 
               Default: 60
     logins : dict
@@ -87,9 +96,13 @@ def connect(servers=None, framed_transport=False, timeout=None, logins=None, ret
 
     if servers is None:
         servers = [DEFAULT_SERVER]
-    return SingleConnection(servers, framed_transport, timeout, retry_time, recycle, logins)
+    return SingleConnection(servers, framed_transport, timeout, retry_time,
+                            recycle, logins)
 
-def connect_thread_local(servers=None, round_robin=None, framed_transport=False, timeout=None, logins=None, retry_time=60, recycle=None):
+
+def connect_thread_local(servers=None, round_robin=None,
+                         framed_transport=False, timeout=None, logins=None,
+                         retry_time=60, recycle=None):
     """
     Constructs a Cassandra connection for each thread.
 
@@ -137,39 +150,72 @@ def connect_thread_local(servers=None, round_robin=None, framed_transport=False,
         servers = [DEFAULT_SERVER]
     if round_robin is not None:
         log.warning('connect_thread_local: `round_robin` parameter is deprecated.')
-    return ThreadLocalConnection(servers, framed_transport, timeout, retry_time, recycle, logins)
+    return ThreadLocalConnection(servers, framed_transport, timeout,
+                                 retry_time, recycle, logins)
+
+
+class ServerSet(object):
+    """Automatically balanced set of servers.
+       Manages a separate stack of failed servers, and automatic
+       retrial."""
+
+    def __init__(self, servers, retry_time=10):
+        self._lock = threading.RLock()
+        self._servers = list(servers)
+        self._retry_time = retry_time
+        self._dead = []
+
+    def get(self):
+        self._lock.acquire()
+        try:
+            if self._dead:
+                ts, revived = self._dead.pop()
+                if ts > time.time():  # Not yet, put it back
+                    self._dead.append((ts, revived))
+                else:
+                    self._servers.append(revived)
+                    log.info('Server %r reinstated into working pool', revived)
+            if not self._servers:
+                log.critical('No servers available')
+                raise NoServerAvailable()
+            return random.choice(self._servers)
+        finally:
+            self._lock.release()
+
+    def mark_dead(self, server):
+        self._lock.acquire()
+        try:
+            self._servers.remove(server)
+            self._dead.insert(0, (time.time() + self._retry_time, server))
+        finally:
+            self._lock.release()
 
 
 class SingleConnection(object):
-    def __init__(self, servers, framed_transport, timeout, retry_time, recycle, logins):
-        self._servers = list(servers)
-        self._dead = []
+    def __init__(self, servers, framed_transport=False, timeout=None,
+                 retry_time=10, recycle=None, logins=None):
+        self._servers = ServerSet(servers, retry_time)
         self._framed_transport = framed_transport
         self._timeout = timeout
-        self._retry_time = retry_time
         self._recycle = recycle
-        self._recycle_time = None
-        log.debug('Using configuration: servers=%r, framed_transport=%r, timeout=%r, retry_time=%r, recycle=%r, logins=%r',
-                  servers, framed_transport, timeout, retry_time, recycle, logins)
         if logins is None:
             self._logins = {}
         else:
             self._logins = logins
-        self._client = None
-        self._lock = threading.RLock()
-
-    def login(self, keyspace, credentials):
-        self._logins[keyspace] = credentials
+        log.debug('Using configuration: servers=%r, framed_transport=%r, timeout=%r, retry_time=%r, recycle=%r, logins=%r',
+                  servers, framed_transport, timeout, retry_time, recycle, logins)
+        self._conn = None
 
     def __getattr__(self, attr):
         def _client_call(*args, **kwargs):
             while True:
-                if self._recycle_time and self._recycle_time < time.time():
-                    log.debug('Recycling connection.')
-                    self.close()
-                self.connect()
                 try:
-                    return getattr(self._client, attr)(*args, **kwargs)
+                    conn = self.connect()
+                    if conn.recycle and conn.recycle < time.time():
+                        log.debug('Client session expired after %is. Recycling.', self._recycle)
+                        self.close()
+                    else:
+                        return getattr(conn.client, attr)(*args, **kwargs)
                 except (Thrift.TException, socket.timeout, socket.error), exc:
                     log.exception('Client error: %s', exc)
                     self.close()
@@ -177,61 +223,43 @@ class SingleConnection(object):
         setattr(self, attr, _client_call)
         return getattr(self, attr)
 
+    def login(self, keyspace, credentials):
+        self._logins[keyspace] = credentials
+
     def connect(self):
-        try:
-            self._lock.acquire()
-            if self._client is None:
-                self._client, self._transport = self._connect()
-        finally:
-            self._lock.release()
+        if self._conn is None:
+            self._conn = self._connect()
+        return self._conn
 
     def close(self):
-        try:
-            self._transport.close()
-        except:
-            pass
-        self._client = self._transport = None
-        log.debug('Connection closed')
-
-    def _get_server(self):
-        if self._dead:
-            ts, revived = self._dead.pop()
-            if ts > time.time():  # Not yet, put it back
-                self._dead.append((ts, revived))
-            else:
-                self._servers.append(revived)
-                log.info('Server %r reinstated into working pool', revived)
-        if not self._servers:
-            log.critical('No servers available')
-            raise NoServerAvailable()
-        return random.choice(self._servers)
+        if self._conn:
+            self._conn.transport.close()
+        self._conn = None
 
     def _connect(self):
         try:
-            server = self._get_server()
-            log.info('Connecting to %s', server)
-            if self._recycle:
-                self._recycle_time = time.time() + self._recycle + random.uniform(0, self._recycle * 0.1)
-                log.debug('Connection will be forcefully recycled in %.2fs', self._recycle)
-            return create_client_transport(server, self._framed_transport, self._timeout, self._logins)
+            server = self._servers.get()
+            log.debug('Connecting to %s', server)
+            return ClientTransport(server, self._framed_transport,
+                                   self._timeout, self._logins, self._recycle)
         except (Thrift.TException, socket.timeout, socket.error):
-            self._servers.remove(server)
-            self._dead.insert(0, (time.time() + self._retry_time, server))
-            log.warning('Connection to %r failed.', server)
+            log.warning('Connection to %s failed.', server)
+            self._servers.mark_dead(server)
             return self._connect()
 
 
 class ThreadLocalConnection(SingleConnection):
-    def __init__(self, servers, framed_transport, timeout, retry_time, recycle, logins):
-        super(ThreadLocalConnection, self).__init__(servers, framed_transport, timeout, retry_time, recycle, logins)
+    def __init__(self, *args, **kwargs):
+        super(ThreadLocalConnection, self).__init__(*args, **kwargs)
         self._local = threading.local()
 
-        def connect(self):
-            if getattr(self._local, 'client', None) is None:
-                self._local.client, self._local.transport = self._servers.connect()
+    def connect(self):
+        if not getattr(self._local, 'conn', None):
+            self._local.conn = self._connect()
+        return self._local.conn
 
-        def close(self):
-            self._local.transport.close()
-            self._local.client = None
-            log.debug('Connection closed')
+    def close(self):
+        if getattr(self._local, 'conn', None):
+            self._local.conn.transport.close()
+        self._local.conn = None
 
