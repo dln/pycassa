@@ -202,39 +202,28 @@ class SingleConnection(object):
             self._logins = {}
         else:
             self._logins = logins
-        log.debug('Using configuration: servers=%r, framed_transport=%r, timeout=%r, retry_time=%r, recycle=%r, logins=%r',
-                  servers, framed_transport, timeout, retry_time, recycle, logins)
         self._conn = None
 
     def __getattr__(self, attr):
         def _client_call(*args, **kwargs):
-            while True:
-                try:
-                    conn = self.connect()
-                    if conn.recycle and conn.recycle < time.time():
-                        log.debug('Client session expired after %is. Recycling.', self._recycle)
-                        self.close()
-                    else:
-                        return getattr(conn.client, attr)(*args, **kwargs)
-                except (Thrift.TException, socket.timeout, socket.error), exc:
-                    log.exception('Client error: %s', exc)
-                    self.close()
-
+            try:
+                conn = self._ensure_connection()
+                return getattr(conn.client, attr)(*args, **kwargs)
+            except (Thrift.TException, socket.timeout, socket.error), exc:
+                log.exception('Client error: %s', exc)
+                self.close()
+                return _client_call(*args, **kwargs) # Retry
         setattr(self, attr, _client_call)
         return getattr(self, attr)
 
-    def login(self, keyspace, credentials):
-        self._logins[keyspace] = credentials
-
-    def connect(self):
-        if self._conn is None:
-            self._conn = self._connect()
-        return self._conn
-
-    def close(self):
-        if self._conn:
-            self._conn.transport.close()
-        self._conn = None
+    def _ensure_connection(self):
+        """Make certain we have a valid connection and return it."""
+        conn = self.connect()
+        if conn.recycle and conn.recycle < time.time():
+            log.debug('Client session expired after %is. Recycling.', self._recycle)
+            self.close()
+            conn = self.connect()
+        return conn
 
     def _connect(self):
         try:
@@ -246,6 +235,22 @@ class SingleConnection(object):
             log.warning('Connection to %s failed.', server)
             self._servers.mark_dead(server)
             return self._connect()
+
+    def login(self, keyspace, credentials):
+        """Add or change active login credentials."""
+        self._logins[keyspace] = credentials
+
+    def connect(self):
+        """Create new connection unless we already have one."""
+        if self._conn is None:
+            self._conn = self._connect()
+        return self._conn
+
+    def close(self):
+        """If a connection is open, close its transport."""
+        if self._conn:
+            self._conn.transport.close()
+        self._conn = None
 
 
 class ThreadLocalConnection(SingleConnection):
