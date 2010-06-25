@@ -54,8 +54,8 @@ class ClientTransport(object):
             self.recycle = None
 
 
-def connect(keyspace, servers=None, framed_transport=False, timeout=None, credentials=None,
-            retry_time=60, recycle=None):
+def connect(keyspace, servers=None, framed_transport=False, timeout=None,
+            credentials=None, retry_time=60, recycle=None, round_robin=None):
     """
     Constructs a single Cassandra connection. Connects to a randomly chosen
     server on the list.
@@ -94,60 +94,9 @@ def connect(keyspace, servers=None, framed_transport=False, timeout=None, creden
 
               Default: None (Never recycle)
 
-    Returns
-    -------
-    Cassandra client
-    """
-
-    if servers is None:
-        servers = [DEFAULT_SERVER]
-    return SingleConnection(keyspace, servers, framed_transport, timeout, retry_time,
-                            recycle, credentials)
-
-
-def connect_thread_local(keyspace, servers=None, round_robin=None,
-                         framed_transport=False, timeout=None, credentials=None,
-                         retry_time=60, recycle=None):
-    """
-    Constructs a Cassandra connection for each thread.
-
-    If the connection fails, it will attempt to connect to each server on the
-    list in turn until one succeeds. If it is unable to find an active server,
-    it will throw a NoServerAvailable exception.
-
-    Failing servers are kept on a separate list and eventually retried, no
-    sooner than `retry_time` seconds after failure.
-
-    Parameters
-
-    Parameters
-    ----------
-    keyspace: string
-              The keyspace to associate this connection with.
-    servers : [server]
-              List of Cassandra servers with format: "hostname:port"
-
-              Default: ['localhost:9160']
     round_robin: bool
               *DEPRECATED*
-    framed_transport: bool
-              If True, use a TFramedTransport instead of a TBufferedTransport
-    timeout: float
-              Timeout in seconds (e.g. 0.5 for half a second)
 
-              Default: None (it will stall forever)
-    credentials : dict
-              Dictionary of Credentials
-
-              Example: {'username':'jsmith', 'password':'havebadpass'}
-    retry_time: float
-              Minimum time in seconds until a failed server is reinstated. (e.g. 0.5)
-
-              Default: 60
-    recycle: float
-              Max time in seconds before an open connection is closed and returned to the pool.
-
-              Default: None (Never recycle)
     Returns
     -------
     Cassandra client
@@ -155,10 +104,11 @@ def connect_thread_local(keyspace, servers=None, round_robin=None,
 
     if servers is None:
         servers = [DEFAULT_SERVER]
-    if round_robin is not None:
-        log.warning('connect_thread_local: `round_robin` parameter is deprecated.')
     return ThreadLocalConnection(keyspace, servers, framed_transport, timeout,
                                  retry_time, recycle, credentials)
+
+connect_thread_local = connect
+
 
 class ServerSet(object):
     """Automatically balanced set of servers.
@@ -197,7 +147,7 @@ class ServerSet(object):
             self._lock.release()
 
 
-class SingleConnection(object):
+class ThreadLocalConnection(object):
     def __init__(self, keyspace, servers, framed_transport=False, timeout=None,
                  retry_time=10, recycle=None, credentials=None):
         self._keyspace = keyspace
@@ -207,6 +157,8 @@ class SingleConnection(object):
         self._recycle = recycle
         self._credentials = credentials
         self._conn = None
+        self._local = threading.local()
+        self._local.conn = None
 
     def __getattr__(self, attr):
         def _client_call(*args, **kwargs):
@@ -229,42 +181,23 @@ class SingleConnection(object):
             conn = self.connect()
         return conn
 
-    def _connect(self):
-        try:
-            server = self._servers.get()
-            log.debug('Connecting to %s', server)
-            return ClientTransport(self._keyspace, server, self._framed_transport,
-                                   self._timeout, self._credentials, self._recycle)
-        except (Thrift.TException, socket.timeout, socket.error):
-            log.warning('Connection to %s failed.', server)
-            self._servers.mark_dead(server)
-            return self._connect()
-
     def connect(self):
         """Create new connection unless we already have one."""
-        if self._conn is None:
-            self._conn = self._connect()
-        return self._conn
-
-    def close(self):
-        """If a connection is open, close its transport."""
-        if self._conn:
-            self._conn.transport.close()
-        self._conn = None
-
-
-class ThreadLocalConnection(SingleConnection):
-    def __init__(self, *args, **kwargs):
-        super(ThreadLocalConnection, self).__init__(*args, **kwargs)
-        self._local = threading.local()
-
-    def connect(self):
-        if not getattr(self._local, 'conn', None):
-            self._local.conn = self._connect()
+        if not self._local.conn:
+            try:
+                server = self._servers.get()
+                log.debug('Connecting to %s', server)
+                self._local.conn = ClientTransport(self._keyspace, server, self._framed_transport,
+                                                   self._timeout, self._logins, self._recycle)
+            except (Thrift.TException, socket.timeout, socket.error):
+                log.warning('Connection to %s failed.', server)
+                self._servers.mark_dead(server)
+                return self.connect()
         return self._local.conn
 
     def close(self):
-        if getattr(self._local, 'conn', None):
+        """If a connection is open, close its transport."""
+        if self._local.conn:
             self._local.conn.transport.close()
         self._local.conn = None
 
