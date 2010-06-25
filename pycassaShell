@@ -1,0 +1,71 @@
+#!/usr/bin/env python
+
+"""
+interactive Cassandra Python shell
+
+"""
+
+try:
+    from IPython.Shell import IPShellEmbed
+except ImportError:
+    print "[I]: IPython not found, falling back to default interpreter."
+
+def runshell():
+    import os
+    os.environ['PYTHONINSPECT'] = '1'
+
+try:
+    __IPYTHON__
+except NameError:
+    runshell = IPShellEmbed([])
+
+import pycassa, optparse
+from sys import stderr, exit
+
+parser = optparse.OptionParser(usage='Usage: %prog [OPTIONS]')
+parser.add_option('-k', '--keyspace', help='Cassandra keyspace name.')
+parser.add_option('-H', '--host', help='Hostname.')
+parser.add_option('-p', '--port', type="int", help='Thrift port number.')
+parser.add_option('-u', '--user', help='Username (for simple auth).')
+parser.add_option('-P', '--passwd', help='Password (for simple auth).')
+
+(options, args) = parser.parse_args()
+
+if not options.keyspace:
+    print >>stderr, "You must specify a keyspace with -k/--keyspace."
+    exit(1)
+
+hostname = options.host and options.host or 'localhost'
+port = options.port and options.port or 9160
+credentials = None
+
+if options.user or options.passwd:
+    if options.user and (not options.passwd):
+        print >>stderr, "You must supply a password for username", options.user
+        exit(1)
+    if options.passwd and (not options.user):
+        print >>stderr, "You need a user to go with that password!"
+        exit(1)
+    credentials = {'username': options.user, 'password': options.passwd}
+
+CLIENT = pycassa.connect(options.keyspace, ['%s:%d' % (hostname, port)],
+                         credentials=credentials)
+
+print """
+Cassandra Interactive Python Shell
+
+%s/%s:%d
+
+Available column family instances:""" % (options.keyspace, hostname, port)
+
+for cfname in CLIENT.describe_keyspace(options.keyspace).keys():
+    cfinstance = pycassa.ColumnFamily(CLIENT, cfname)
+    exec('%s = cfinstance' % cfname.upper())
+    print " *", cfname.upper()
+
+print """
+Raw Thrift client available as CLIENT.
+
+Enjoy!"""
+
+runshell()

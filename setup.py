@@ -25,9 +25,10 @@ setup(
       license = 'MIT',
       keywords = 'cassandra client database db distributed thrift',
       packages = ['pycassa'],
+      scripts=['pycassaShell'],
       platforms = ['any'],
       install_requires = [
-          'Thrift',
+          'thrift',
           # FIXME: Are there dependable eggs/python packages for we can rely on?
           # 'python-cassandra'  # http://github.com/ieure/python-cassandra/
       ],

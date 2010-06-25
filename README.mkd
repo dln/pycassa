@@ -17,7 +17,7 @@ Requirements
 ------------
 
     thrift: http://incubator.apache.org/thrift/
-    Cassandra: http://incubator.apache.org/cassandra/
+    Cassandra: http://cassandra.apache.org
 
 Install thrift with the python bindings.
 
@@ -46,18 +46,18 @@ To read usage documentation:
 
 For a single connection (which is _not_ thread-safe), pass a list of servers.
 
-    >>> client = pycassa.connect() # Defaults to connecting to the server at 'localhost:9160'
-    >>> client = pycassa.connect(['localhost:9160'])
+    >>> client = pycassa.connect('Keyspace1') # Defaults to connecting to the server at 'localhost:9160'
+    >>> client = pycassa.connect('Keyspace1', ['localhost:9160'])
 
 If you need Framed Transport, pass the framed_transport argument.
 
-    >>> client = pycassa.connect(framed_transport=True)
+    >>> client = pycassa.connect('Keyspace1', framed_transport=True)
 
 Thread-local connections opens a connection for every thread that calls a Cassandra function. It also automatically balances the number of connections between servers. Failed servers are added to a separate "dead" list and reintroduced into the active pool after `retry` seconds.
 
-    >>> client = pycassa.connect_thread_local() # Defaults to connecting to the server at 'localhost:9160'
-    >>> client = pycassa.connect_thread_local(['localhost:9160', 'other_server:9160']) # Load-balanced
-    >>> client = pycassa.connect_thread_local(['localhost:9160', 'other_server:9160'], retry=10, recycle=30) # Load-balanced, failed servers are retried after 10s, sessions limited to 30s
+    >>> client = pycassa.connect_thread_local('Keyspace1') # Defaults to connecting to the server at 'localhost:9160'
+    >>> client = pycassa.connect_thread_local('Keyspace1', ['localhost:9160', 'other_server:9160']) # Load-balanced
+    >>> client = pycassa.connect_thread_local('Keyspace1', ['localhost:9160', 'other_server:9160'], retry=10, recycle=30) # Load-balanced, failed servers are retried after 10s, sessions limited to 30s
 
 For improved load balancing, you may also pass the `recycle` argument, which limits session time for connections before being returned to the pool. This ensures restarted/failed servers will be utilized sooner. A random "fudge factor" is added to the recycle time to reduce herding.
 
@@ -65,7 +65,7 @@ Connections are robust to server failures. Upon a disconnection, it will attempt
 
 Timeouts are also supported and should be used in production to prevent a thread from freezing while waiting for Cassandra to return.
 
-    >>> client = pycassa.connect(timeout=3.5) # 3.5 second timeout
+    >>> client = pycassa.connect('Keyspace1', timeout=3.5) # 3.5 second timeout
     (Make some pycassa calls and the connection to the server suddenly becomes unresponsive.)
 
     Traceback (most recent call last):
@@ -74,18 +74,17 @@ Timeouts are also supported and should be used in production to prevent a thread
 
 Note that this only handles socket timeouts. The TimedOutException from Cassandra may still be raised.
 
-You can save login credentials with the .login() function.
+If simple authentication is in use, you can pass in a dict of credentials using the credentials keyword.
 
-    >>> client.login('Keyspace1', {'username': 'jsmith', 'password': 'havebadpass'})
-
-These credentials will automatically be re-used on every successful connection. You only need to call login() once.
+    >>> credentials = {'username': 'jsmith', 'password': 'havebadpass'}
+    >>> client = pycassa.connect('Keyspace1', credentials=credentials)
 
 Basic Usage
 -----------
 
 To use the standard interface, create a ColumnFamily instance.
 
-    >>> cf = pycassa.ColumnFamily(client, 'Test Keyspace', 'Test ColumnFamily')
+    >>> cf = pycassa.ColumnFamily(client, 'Test ColumnFamily')
 
 The value returned by an insert is the timestamp used for insertion, or int(time.time() * 1e6). You may replace this function with your own (see Extra Documentation).
 
@@ -222,7 +221,7 @@ SuperColumns
 
 To use SuperColumns, pass super=True to the ColumnFamily constructor.
 
-    >>> cf = pycassa.ColumnFamily(client, 'Test Keyspace', 'Test SuperColumnFamily', super=True)
+    >>> cf = pycassa.ColumnFamily(client, 'Test SuperColumnFamily', super=True)
     >>> cf.insert('key1', {'1': {'sub1': 'val1', 'sub2': 'val2'}, '2': {'sub3': 'val3', 'sub4': 'val4'}})
     1261490144457132
     >>> cf.get('key1')
@@ -261,7 +260,7 @@ Advanced
 
 pycassa currently returns Cassandra Columns and SuperColumns as python dictionaries. Sometimes, though, you care about the order of elements. If you have access to an ordered dictionary class (such as collections.OrderedDict in python 2.7), then you may pass it to the constructor. All returned values will be of that class.
 
-    >>> cf = pycassa.ColumnFamily(client, 'Test Keyspace', 'Test ColumnFamily',
+    >>> cf = pycassa.ColumnFamily(client, 'Test ColumnFamily',
                                   dict_class=collections.OrderedDict)
 
 You may also define your own Column types for the mapper. For example, the IntString may be defined as:
@@ -279,20 +278,13 @@ Meta API
 All of the underlying Cassandra interface functions are available through the connection.
 
     >>> client = pycassa.connect()
-    >>> client.get_string_property('version')
-    '0.5.1'
-    >>> client.get_string_list_property('keyspaces')
+    >>> client.describe_version()
+    '8.1.0'
+    >>> client.describe_keyspaces()
     ['Test Keyspace', 'system']
     >>> client.describe_keyspace('system')
     {'LocationInfo': {'Type': 'Standard', 'CompareWith': 'org.apache.cassandra.db.marshal.UTF8Type', 'Desc': 'persistent metadata for the local node'}, 'HintsColumnFamily': {'CompareSubcolumnsWith': 'org.apache.cassandra.db.marshal.BytesType', 'Type': 'Super', 'CompareWith': 'org.apache.cassandra.db.marshal.UTF8Type', 'Desc': 'hinted handoff data'}}
 
-As of Cassandra 0.5.1, valid arguments for get_string_property() are:
-
-    "cluster name", "config file", "token map", "version"
-
-Valid arguments for get_string_list_property() are:
-
-    "keyspaces"
 
 Extra Documentation
 -------------------
@@ -304,8 +296,6 @@ All the functions have the exact same functionality as their thrift counterparts
         ----------
         client   : cassandra.Cassandra.Client
             Cassandra client with thrift API
-        keyspace : str
-            The Keyspace this ColumnFamily belongs to
         column_family : str
             The name of this ColumnFamily
         buffer_size : int

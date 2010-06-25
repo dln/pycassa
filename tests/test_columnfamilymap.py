@@ -57,9 +57,9 @@ class TestEmpty(object):
 
 class TestColumnFamilyMap:
     def setUp(self):
-        self.client = connect()
-        self.client.login('Keyspace1', {'username': 'jsmith', 'password': 'havebadpass'})
-        self.cf = ColumnFamily(self.client, 'Keyspace1', 'Standard2',
+        credentials = {'username': 'jsmith', 'password': 'havebadpass'}
+        self.client = connect('Keyspace1', credentials=credentials)
+        self.cf = ColumnFamily(self.client, 'Standard2',
                                write_consistency_level=ConsistencyLevel.ONE,
                                timestamp=self.timestamp)
         self.map = ColumnFamilyMap(TestUTF8, self.cf)
@@ -98,13 +98,6 @@ class TestColumnFamilyMap:
         instance.datetimestrcol = datetime.now().replace(microsecond=0)
 
         return instance
-
-    def test_will_not_insert_none(self):
-        for column in ('strcol', 'intcol', 'floatcol', 'datetimecol',
-                       'intstrcol', 'floatstrcol', 'datetimestrcol'):
-            instance = self.instance('TestColumnFamilyMap.test_will_not_insert_none')
-            setattr(instance, column, None)
-            assert_raises(TypeError, self.map.insert, instance)
 
     def test_empty(self):
         key = 'TestColumnFamilyMap.test_empty'
@@ -185,9 +178,9 @@ class TestColumnFamilyMap:
 
 class TestSuperColumnFamilyMap:
     def setUp(self):
-        self.client = connect_thread_local()
-        self.client.login('Keyspace1', {'username': 'jsmith', 'password': 'havebadpass'})
-        self.cf = ColumnFamily(self.client, 'Keyspace1', 'Super2',
+        credentials = {'username': 'jsmith', 'password': 'havebadpass'}
+        self.client = connect_thread_local('Keyspace1', credentials=credentials)
+        self.cf = ColumnFamily(self.client, 'Super2',
                                write_consistency_level=ConsistencyLevel.ONE,
                                timestamp=self.timestamp,
                                super=True)
