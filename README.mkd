@@ -44,20 +44,20 @@ To read usage documentation:
     >>> import pycassa
     >>> help(pycassa.ColumnFamily.get)
 
-For a single connection (which is _not_ thread-safe), pass a list of servers.
+To open a connection, pass a list of servers to `connect`.
 
     >>> client = pycassa.connect() # Defaults to connecting to the server at 'localhost:9160'
     >>> client = pycassa.connect(['localhost:9160'])
 
-If you need Framed Transport, pass the framed_transport argument.
+If you need Framed Transport, pass the `framed_transport` argument.
 
     >>> client = pycassa.connect(framed_transport=True)
 
-Thread-local connections opens a connection for every thread that calls a Cassandra function. It also automatically balances the number of connections between servers. Failed servers are added to a separate "dead" list and reintroduced into the active pool after `retry` seconds.
+A connection is opened for every thread that calls a Cassandra function. It also automatically balances the number of connections between servers. Failed servers are added to a separate "dead" list and reintroduced into the active pool after `retry` seconds.
 
-    >>> client = pycassa.connect_thread_local() # Defaults to connecting to the server at 'localhost:9160'
-    >>> client = pycassa.connect_thread_local(['localhost:9160', 'other_server:9160']) # Load-balanced
-    >>> client = pycassa.connect_thread_local(['localhost:9160', 'other_server:9160'], retry=10, recycle=30) # Load-balanced, failed servers are retried after 10s, sessions limited to 30s
+    >>> client = pycassa.connect() # Defaults to connecting to the server at 'localhost:9160'
+    >>> client = pycassa.connect(['localhost:9160', 'other_server:9160']) # Load-balanced
+    >>> client = pycassa.connect(['localhost:9160', 'other_server:9160'], retry=10, recycle=30) # Load-balanced, failed servers are retried after 10s, sessions limited to 30s
 
 For improved load balancing, you may also pass the `recycle` argument, which limits session time for connections before being returned to the pool. This ensures restarted/failed servers will be utilized sooner. A random "fudge factor" is added to the recycle time to reduce herding.
 
