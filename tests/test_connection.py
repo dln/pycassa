@@ -3,12 +3,12 @@ import threading
 from pycassa import connect, connect_thread_local
 
 def version_check(connection, version):
-    assert connection.describe_version() == version
+    assert connection.get_string_property('version') == version
 
 def test_connections():
-    version = connect('Keyspace1').describe_version()
+    version = connect().describe_version()
 
-    thread_local = connect_thread_local('Keyspace1')
+    thread_local = connect_thread_local()
     threads = []
     for i in xrange(10):
         threads.append(threading.Thread(target=version_check,

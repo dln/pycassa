@@ -37,19 +37,8 @@ if not options.keyspace:
 
 hostname = options.host and options.host or 'localhost'
 port = options.port and options.port or 9160
-credentials = None
 
-if options.user or options.passwd:
-    if options.user and (not options.passwd):
-        print >>stderr, "You must supply a password for username", options.user
-        exit(1)
-    if options.passwd and (not options.user):
-        print >>stderr, "You need a user to go with that password!"
-        exit(1)
-    credentials = {'username': options.user, 'password': options.passwd}
-
-CLIENT = pycassa.connect(options.keyspace, ['%s:%d' % (hostname, port)],
-                         credentials=credentials)
+CLIENT = pycassa.connect(['%s:%d' % (hostname, port)])
 
 print """
 Cassandra Interactive Python Shell
@@ -59,7 +48,7 @@ Cassandra Interactive Python Shell
 Available column family instances:""" % (options.keyspace, hostname, port)
 
 for cfname in CLIENT.describe_keyspace(options.keyspace).keys():
-    cfinstance = pycassa.ColumnFamily(CLIENT, cfname)
+    cfinstance = pycassa.ColumnFamily(CLIENT, options.keyspace, cfname)
     exec('%s = cfinstance' % cfname.upper())
     print " *", cfname.upper()
 

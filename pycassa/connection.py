@@ -25,7 +25,7 @@ class NoServerAvailable(Exception):
 class ClientTransport(object):
     """Encapsulation of a client session."""
 
-    def __init__(self, keyspace, server, framed_transport, timeout, credentials, recycle):
+    def __init__(self, server, framed_transport, timeout, logins, recycle):
         host, port = server.split(":")
         socket = TSocket.TSocket(host, int(port))
         if timeout is not None:
@@ -38,13 +38,11 @@ class ClientTransport(object):
         client = Cassandra.Client(protocol)
         transport.open()
 
-        client.set_keyspace(keyspace)
+        if logins is not None:
+            for keyspace, credentials in logins.iteritems():
+                request = AuthenticationRequest(credentials=credentials)
+                client.login(request)
 
-        if credentials is not None:
-            request = AuthenticationRequest(credentials=credentials)
-            client.login(request)
-
-        self.keyspace = keyspace
         self.client = client
         self.transport = transport
 
@@ -54,8 +52,8 @@ class ClientTransport(object):
             self.recycle = None
 
 
-def connect(keyspace, servers=None, framed_transport=False, timeout=None,
-            credentials=None, retry_time=60, recycle=None, round_robin=None):
+def connect(servers=None, framed_transport=False, timeout=None,
+            logins=None, retry_time=60, recycle=None, round_robin=None):
     """
     Constructs a single Cassandra connection. Connects to a randomly chosen
     server on the list.
@@ -69,14 +67,13 @@ def connect(keyspace, servers=None, framed_transport=False, timeout=None,
 
     Parameters
     ----------
-    keyspace: string
-              The keyspace to associate this connection with.
     servers : [server]
               List of Cassandra servers with format: "hostname:port"
 
               Default: ['localhost:9160']
     framed_transport: bool
               If True, use a TFramedTransport instead of a TBufferedTransport
+
     timeout: float
               Timeout in seconds (e.g. 0.5)
 
@@ -85,15 +82,14 @@ def connect(keyspace, servers=None, framed_transport=False, timeout=None,
               Minimum time in seconds until a failed server is reinstated. (e.g. 0.5)
 
               Default: 60
-    credentials : dict
-              Dictionary of Credentials
+    logins : dict
+              Dictionary of Keyspaces and Credentials
 
-              Example: {'username':'jsmith', 'password':'havebadpass'}
+              Example: {'Keyspace1' : {'username':'jsmith', 'password':'havebadpass'}}
     recycle: float
               Max time in seconds before an open connection is closed and returned to the pool.
 
               Default: None (Never recycle)
-
     round_robin: bool
               *DEPRECATED*
 
@@ -104,8 +100,9 @@ def connect(keyspace, servers=None, framed_transport=False, timeout=None,
 
     if servers is None:
         servers = [DEFAULT_SERVER]
-    return ThreadLocalConnection(keyspace, servers, framed_transport, timeout,
-                                 retry_time, recycle, credentials)
+
+    return ThreadLocalConnection(servers, framed_transport, timeout,
+                                 retry_time, recycle, logins)
 
 connect_thread_local = connect
 
@@ -148,17 +145,21 @@ class ServerSet(object):
 
 
 class ThreadLocalConnection(object):
-    def __init__(self, keyspace, servers, framed_transport=False, timeout=None,
-                 retry_time=10, recycle=None, credentials=None):
-        self._keyspace = keyspace
+    def __init__(self, servers, framed_transport=False, timeout=None,
+                 retry_time=10, recycle=None, logins=None):
         self._servers = ServerSet(servers, retry_time)
         self._framed_transport = framed_transport
         self._timeout = timeout
         self._recycle = recycle
-        self._credentials = credentials
-        self._conn = None
+        if logins is None:
+            self._logins = {}
+        else:
+            self._logins = logins
         self._local = threading.local()
         self._local.conn = None
+
+    def login(self, keyspace, credentials):
+        self._logins[keyspace] = credentials
 
     def __getattr__(self, attr):
         def _client_call(*args, **kwargs):
@@ -187,7 +188,7 @@ class ThreadLocalConnection(object):
             try:
                 server = self._servers.get()
                 log.debug('Connecting to %s', server)
-                self._local.conn = ClientTransport(self._keyspace, server, self._framed_transport,
+                self._local.conn = ClientTransport(server, self._framed_transport,
                                                    self._timeout, self._logins, self._recycle)
             except (Thrift.TException, socket.timeout, socket.error):
                 log.warning('Connection to %s failed.', server)

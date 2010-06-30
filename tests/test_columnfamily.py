@@ -7,9 +7,9 @@ class TestDict(dict):
 
 class TestColumnFamily:
     def setUp(self):
-        credentials = {'username': 'jsmith', 'password': 'havebadpass'}
-        self.client = connect('Keyspace1', credentials=credentials)
-        self.cf = ColumnFamily(self.client, 'Standard2',
+        self.client = connect()
+        self.client.login('Keyspace1', {'username': 'jsmith', 'password': 'havebadpass'})
+        self.cf = ColumnFamily(self.client, 'Keyspace1', 'Standard2',
                                write_consistency_level=ConsistencyLevel.ONE,
                                buffer_size=2, timestamp=self.timestamp,
                                dict_class=TestDict)
@@ -101,9 +101,9 @@ class TestColumnFamily:
 
 class TestSuperColumnFamily:
     def setUp(self):
-        credentials = {'username': 'jsmith', 'password': 'havebadpass'}
-        self.client = connect_thread_local('Keyspace1', credentials=credentials)
-        self.cf = ColumnFamily(self.client, 'Super2',
+        self.client = connect_thread_local()
+        self.client.login('Keyspace1', {'username': 'jsmith', 'password': 'havebadpass'})
+        self.cf = ColumnFamily(self.client, 'Keyspace1', 'Super2',
                                write_consistency_level=ConsistencyLevel.ONE,
                                buffer_size=2, timestamp=self.timestamp,
                                super=True)
