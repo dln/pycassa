@@ -156,7 +156,6 @@ class ThreadLocalConnection(object):
         else:
             self._logins = logins
         self._local = threading.local()
-        self._local.conn = None
 
     def login(self, keyspace, credentials):
         self._logins[keyspace] = credentials
@@ -184,7 +183,7 @@ class ThreadLocalConnection(object):
 
     def connect(self):
         """Create new connection unless we already have one."""
-        if not self._local.conn:
+        if not getattr(self._local, 'conn', None):
             try:
                 server = self._servers.get()
                 log.debug('Connecting to %s', server)
